@@ -1,0 +1,677 @@
+/*
+	WELCOME!!!!
+*/
+
+// THIS IS C CODE. SAVE AS .C AND COMPILE
+
+/*
+	DEFINITIONS
+*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+
+typedef uint32_t REGISTER;		// registers are 32 bits
+typedef uint32_t WORD;			// words are 32 bits
+typedef uint8_t BYTE;			// bytes are 8 bits
+
+
+REGISTER registers[16];			// Registers R0-R15
+WORD memory[1024];			// 4 kilobytes of RAM in this example (since 1 word = 4 bytes)
+BYTE status_register = 0;		// Current program status register (Because in ARM it has a unique register.
+
+#define COND_CODE_POS (28)
+#define SET_SR (20)
+#define OPCODE_POS (21) // is it 24 or 21??
+
+//condition code. REFERENCE :- http://www.davespace.co.uk/arm/introduction-to-arm/conditional.html
+#define CC_EQ	(0x0) // Equals
+#define CC_NE	(0x1) // not equal
+#define CC_CS	(0x2) // Carry set (also used for Unsigned higher or same)
+#define CC_CC	(0x3) // Carry clear (also used for Unsigned lower)
+#define CC_MI	(0x4) // Minus / negative
+#define CC_PL	(0x5) // Plus / positive
+#define CC_VS	(0x6) // Overflow
+#define CC_VC	(0x7) // No overflow
+#define CC_HI	(0x8) // Unsigned hiher
+#define CC_LS	(0x9) // Unsigned lower or same
+#define CC_GE	(0xa) // Signed greater than or quals
+#define CC_LT	(0xb) // Signed less than
+#define CC_GT	(0xc) // Signed greater than
+#define CC_LE	(0xd) // Signed less than or equals
+#define CC_AL	(0xe) // Always (default)
+#define CC_NV	(0xf) //DEPRECATED DO NOT USE!!! (Originally used as an analogue for the AL condictin code)
+/*
+These would normally only be used with jumps in other languages, but arm allows them to be used elsewhere.
+Why? And inline conditions explained
+
+Take this example:
+    CMP   r3, #0
+    BEQ   next
+    ADD   r0, r0, r1
+    SUB   r0, r0, r2
+next
+
+The above example DOES NOT have inline conditions. We just use a jump to skip them. Compare this to the below example:
+
+    CMP   r3, #0
+    ADDNE r0, r0, r1
+    SUBNE r0, r0, r2
+
+The above example DOES use inline conditions. Notice the NE after add. 
+*/
+
+#define OP_AND	(0x0)
+#define OP_EOR	(0x1)
+#define OP_SUB	(0x2)
+#define OP_RSB	(0x3)
+#define OP_ADD	(0x4)
+#define OP_ADC	(0x5)
+#define OP_SBC	(0x6)
+#define OP_RSC	(0x7)
+#define OP_TST	(0x8)
+#define OP_TEQ	(0x9)
+#define OP_CMP	(0xa)
+#define OP_CMN	(0xb)
+#define OP_ORR	(0xc)
+#define OP_MOV	(0xd)
+#define OP_BIC	(0xe)
+#define OP_MVN	(0xf)
+
+
+
+// status flag
+#define STAT_N	(1<<7) // Result is Negative
+#define STAT_Z	(1<<6) // Result is zero
+#define STAT_C	(1<<5) // Set if the result is bigger than 32 bits. Also set from the output of shifter, move and logical instructions.
+#define STAT_V	(1<<4) // If the operation produces a signed result bigger than 31 bits. 
+
+#define BIT_27  (1<<27)
+#define BIT_26  (1<<26)
+#define BIT_25  (1<<25)
+#define BIT_24  (1<<24)
+#define BIT_23  (1<<23)
+#define BIT_22  (1<<22)
+#define BIT_21  (1<<21)
+#define BIT_20  (1<<20)
+
+
+/*
+	FETCH/MAIN FUNCTION
+*/
+/*
+What does each instruction line mean? We get them in hex but what does everything mean?
+
+https://i.stack.imgur.com/0cPOx.png <- Look at this
+
+https://armconverter.com/ <- Converter here 
+
+WE ARE USING ARM BIG ENDIAN.
+
+*/
+
+int main(void) // CONSIDER THIS THE 'FETCH' PHASE
+{
+	char c = "";
+	int done = 0;
+	REGISTER pc = 0; // Init program counter.
+
+
+	/*
+	 The below line gets the hex code and stores it in the memory array.
+	*/
+	char filename[] = "code.txt";
+	FILE *file = fopen ( filename, "r" );
+	int memAddr = 0;
+
+	if (file != NULL) {
+		char line [1000];
+		while(fgets(line,sizeof line,file) != NULL) {
+		  printf("\n%s", line);
+		  int convert = (int)strtol(line, NULL, 16);
+		  memory[memAddr] = convert;
+		  memAddr = memAddr + 1;
+		}
+		fclose(file);
+		}
+	else {
+	  printf("I need a file called code.txt in the same dir to work. (put the big-endian code in there)");
+	  perror(filename); //print the error message on stderr.
+	}
+
+	
+	while (!done)
+	{
+		// Grab the program counter and relivent instruction
+		printf("\n\n-----------------------------------");
+		printf("\nR0 = %x R1 = %x R2 = %x R3 = %x", registers[0], registers[1], registers[2], registers[3]);
+		printf("\nR4 = %x R5 = %x R6 = %x R7 = %x", registers[4], registers[5], registers[6], registers[7]);
+		printf("\nR8 = %x R9 = %x R10= %x R11= %x", registers[8], registers[9], registers[10], registers[11]);
+		printf("\nR12= %x R13= %x BL = %x PC = %x\n\n", registers[12], registers[13], registers[14], registers[15]);
+		printf("SR = %x    NOTE: ALL vals in hex ", status_register);
+		printf("\n -----------------------------------");
+		
+		printf("\n Press any key for next instruction!");
+		while((c=getc(stdin))==' '); // grabs input
+		printf("\n Machine Code   OpCode   Operand");
+		printf("\n -----------------------------------");
+		pc = registers[15];
+		WORD instruction = memory[pc++];
+		printf("\n%x   ", instruction);
+		registers[15] = pc;		
+		
+		if ( instruction != 0 ) 
+		{
+			execute(instruction);
+		}
+		else 
+		{
+			done = 1;
+		}
+	}
+	return 0;
+}
+
+
+/*
+	EXECUTE UTILITIES
+*/
+
+/*
+<operation> - A three-letter mnemonic, e.g. MOV or ADD.
+
+{cond} - An optional two-letter condition code, e.g. EQ or CS.
+
+{flags} - An optional additional flags. e.g. S.
+
+Rd - The destination register.
+
+Rn - The first source register.
+
+Operand2 - A flexible second operand. 
+*/
+void execute(WORD inst)
+{
+	/*
+	These nested IF statements drive the program
+	Decides what the instruction is
+	
+	*/ 
+
+
+	
+	if ( inst & BIT_27 ) {
+			// bit 27 set, so is a branch or SWI instruction
+			if ( inst & BIT_25 ) {
+				if ( inst & BIT_26 ) {
+	 				// SWI (111 code in bits 27,26,25)
+	 				printf("SWI");
+	 			}
+	 			else {
+	 				// Is a Branch or BL  (101 code in bits 27,26,25)
+	 				// CHECK FOR LINK BIT
+	 				int condition_code = inst >> COND_CODE_POS;
+	 				int exec = decode(condition_code);
+	 				if (exec){
+		 				if (!(inst >> 24)){
+		 				// 
+		 					registers[14] = registers[15]; // LINKs (saves) the program counter to register 14.
+		 					printf("BL");
+		 				}
+		 				else{
+		 					printf("B ");
+		 				}
+		 				int targetWord = (inst & 0xffffff); // USE 0xFFFFFF as a mask to get just 24 bits SHOULD BE SIGNED
+		 				printf("#%d ", targetWord);
+		 				registers[15] = targetWord;
+		 				
+		 				
+	 				}
+	 			}
+	 		}
+	 		else {
+	 				// unsupported instruction code
+	 				printf("\n ERROR INCORRECT CODE!!!\n");
+	 		}
+	}
+	else {
+			// bit 27 clear, so is a data processing instruction, or single data transfer
+	 
+			if ( inst & BIT_26 ) {
+				// Single data transfer
+				/*
+				This is full enough for the mark scheme but there are some extra things you could add here.
+				
+				This implementation just supports:
+				
+				LDR  -  Load Word. 
+				
+				STR  -  Store Word.
+				
+				*/
+				int loadStoreBit = BIT_20 & inst; 
+				int writebackBit = BIT_21 & inst; // DIDN'T DO
+				int byteWordBit = BIT_22 & inst; // DIDN'T DO
+				int upDownBit = BIT_23 & inst; // DIDN'T DO
+				int prePostBit = BIT_24 & inst; // DIDN'T DO
+				int immediateBit = BIT_25 & inst;
+				int RegN = (inst << 19) & 0xf;
+				int RegDest = (inst << 15) & 0xf;
+				int Offset = (inst << 12) & 0xfff;
+				/* All registers grabbed 
+				*/
+				
+
+				
+				if (!loadStoreBit){
+					// STORE
+					printf("STR ");
+					if (!immediateBit)
+					{
+						// Stores the base register in specified address. 
+						printf(" R%d, R%d ", RegN, RegDest);
+						memory[RegDest] = registers[RegN]; 
+					}
+					else{
+						// No difference??
+						printf(" #%x, R%d ", RegN, RegDest);
+						memory[RegDest] = RegN; 
+					}
+				
+					
+				}
+				else{
+					//LOAD
+					printf("LDR ");
+					if (!immediateBit)
+					{
+						// Loads the requested register into the base register
+						printf(" R%d, R%d ", RegN, RegDest);
+						registers[RegN] = memory[RegDest];
+					}
+					else{
+						printf(" R%d, #%x ", RegN, RegDest);
+						// Loads the value into the specified register
+						registers[RegN] = RegDest;
+					}
+				
+				}
+					
+				
+				
+			}
+			else {
+				int condition_code = inst >> COND_CODE_POS;	// get the condition flags (top 4 bits of the instruction).
+				int opcode = (inst >> OPCODE_POS) & 0xf;		// Grabs the opcode. 
+				int setSR = (inst >> SET_SR);
+				int exec = decode(condition_code);
+				int RN;
+				int RD;
+				int Operand1;
+				int Operand2; // this is 8 bits long, we pre-defined byte datatye. MAKE THIS BYTE PROBBALY OR & 0xFF
+				int immediateReg;
+				int target;
+				if (exec)
+				{
+					switch (opcode)
+					{
+						case OP_AND:
+							break;
+						case OP_EOR:
+							break;
+						case OP_SUB:
+							printf("SUB ");
+							RN = (inst >> 16) & 0xf; // First operand (ALWAYS a register)
+							Operand1 = registers[RN];
+							RD = (inst >> 12) & 0xf; // Desination register
+							Operand2 = inst & 0xff; // Can be a register OR a value FIX LENGTH 8!!!!!!!!!!
+							immediateReg = BIT_25 & inst; // Use this to check if operand2 is an immediate value (1) or register(0).
+							if (!immediateReg)
+							{
+								target = (inst) & 0xf;
+								Operand2 = registers[ target ];
+								printf("R%d, R%d ,R%d",  RD, RN, target);
+							}
+							else{
+								printf("R%d, R%d ,#%d",  RD, RN, Operand2);
+							}
+							doSub(RD,Operand1,Operand2,setSR);
+							break;
+						case OP_ADD:
+							printf("ADD ");
+							RN = (inst >> 16) & 0xf; // First operand (ALWAYS a register)
+							Operand1 = registers[RN];
+							RD = (inst >> 12) & 0xf; // Desination register
+							Operand2 = inst & 0xff; // Can be a register OR a value FIX LENGTH 8!!!!!!!!!!
+							immediateReg = BIT_25 & inst; // Use this to check if operand2 is an immediate value (1) or register(0).
+							if (!immediateReg)
+							{
+								target = (inst) & 0xf;
+								Operand2 = registers[ target ];
+								printf("R%d, R%d ,R%d",  RD, RN, target);
+							}
+							else{
+								printf("R%d, R%d ,#%d",  RD, RN, Operand2);
+							}
+							doAdd(RD,Operand1,Operand2,setSR);
+							break;
+						case OP_ADC:
+							break;
+						case OP_SBC:
+							break;
+						case OP_RSC:
+							break;
+						case OP_TST:
+							break;
+						case OP_TEQ:
+							break;
+						case OP_CMP: // DOES NOT NEED THE DESTINATION REG. SHOULD REMOVE
+							printf("CMP ");
+							RN = (inst >> 16) & 0xf; // First operand (ALWAYS a register)
+							Operand1 = registers[RN];
+							RD = (inst >> 12) & 0xf; // Desination register
+							Operand2 = inst & 0xff;
+							immediateReg = BIT_25 & inst; // Use this to check if operand2 is an immediate value (1) or register(0).
+							if (!immediateReg)
+							{
+								target = (inst) & 0xf;
+								Operand2 = registers[ target ];
+								printf("R%d, R%d", Operand1, target);
+							}
+							else{
+								printf("R%d, #%d", Operand1, Operand2);
+							}
+							doCompare(RD,Operand1,Operand2,1);
+							break;
+						case OP_CMN:
+							break;
+						case OP_ORR:
+							break;
+						case OP_MOV:
+							printf("MOV ");
+							RD = (inst >> 12) & 0xf; 
+							Operand2 = inst & 0xff;
+							immediateReg = BIT_25 & inst;
+							if (!immediateReg)
+							{	
+								target = (inst) & 0xf;
+								Operand2 = registers[ target ];
+								printf("R%d, R%d", RD, target);
+							}
+							else{
+								printf("R%d, #%d", RD, Operand2);
+							}
+							doMove(RD, Operand2, setSR);
+							break;
+						case OP_BIC:
+							break;
+						case OP_MVN:
+							break;
+					}
+				}
+			}
+	}
+}
+/*
+	OPCODE / INSTRUCTION UTILITIES
+*/
+
+void doAdd(int regNumber, WORD op1Value, WORD op2Value, int setSR)
+{
+	WORD result = op1Value + op2Value;
+
+	registers[ regNumber ] = result;
+
+	if ( setSR ) {
+		// set the SR flags by examining the result. This can be difficult for certain flags!
+
+		// CHECK ZERO FLAG
+		if ( result == 0 ) {
+
+			setFlag(STAT_Z);
+		}
+		else {
+
+			clearFlag(STAT_Z);
+		}
+		
+		// CHECK NEAGTIVE FLAG
+		if ( result < 0) 
+		{
+			setFlag(STAT_N);
+		}
+		
+		else 
+		{
+			clearFlag(STAT_N);
+		}
+		
+		// CHECK CARRY FLAG
+		if ( (result < op1Value) || (result < op2Value) )
+		{
+			setFlag(STAT_C);
+		}
+		
+		else 
+		{
+			clearFlag(STAT_C);
+		}	
+		// AS STATED IN TIPS SECTION (Overflow?)
+		if ( (( result >> 31 ) ^ (op1Value >> 31)) & (( op1Value >> 31 ) & (op2Value >> 31)) )
+		{
+			setFlag(STAT_C);
+		}
+		
+		else 
+		{
+			clearFlag(STAT_C);
+		}	
+		
+	}
+}
+
+void doSub(int regNumber, WORD op1Value, WORD op2Value, int setSR)
+{
+	WORD result = op1Value - op2Value;
+
+	registers[ regNumber ] = result;
+
+	if ( setSR ) {
+		// set the SR flags by examining the result. This can be difficult for certain flags!
+
+		// CHECK ZERO FLAG
+		if ( result == 0 ) {
+
+			setFlag(STAT_Z);
+		}
+		else {
+
+			clearFlag(STAT_Z);
+		}
+		
+		// CHECK NEAGTIVE FLAG
+		if ( result < 0) 
+		{
+			setFlag(STAT_N);
+		}
+		
+		else 
+		{
+			clearFlag(STAT_N);
+		}
+		
+		// CHECK CARRY FLAG
+		if ( ( op1Value >= op2Value) )
+		{
+			setFlag(STAT_C);
+		}
+		
+		else 
+		{
+			clearFlag(STAT_C);
+		}	
+		// AS STATED IN TIPS SECTION (Overflow?)
+		if ( (( result >> 31 ) ^ (op1Value >> 31)) & (( op1Value ) != ( op2Value )) )
+		{
+			setFlag(STAT_C);
+		}
+		
+		else 
+		{
+			clearFlag(STAT_C);
+		}	
+		
+	}
+}
+
+void doCompare(int regNumber, WORD op1Value, WORD op2Value, int setSR)
+{
+	WORD result = op1Value + op2Value;
+
+	if ( setSR ) {
+		// set the SR flags by examining the result. This can be difficult for certain flags!
+
+		// CHECK ZERO FLAG
+		if ( result == 0 ) {
+
+			setFlag(STAT_Z);
+		}
+		else {
+
+			clearFlag(STAT_Z);
+		}
+		
+		// CHECK NEAGTIVE FLAG
+		if ( result < 0) 
+		{
+			setFlag(STAT_N);
+		}
+		
+		else 
+		{
+			clearFlag(STAT_N);
+		}
+		
+		// CHECK CARRY FLAG
+		if ( ( op1Value >= op2Value) )
+		{
+			setFlag(STAT_C);
+		}
+		
+		else 
+		{
+			clearFlag(STAT_C);
+		}	
+		// AS STATED IN TIPS SECTION (Overflow?)
+		if ( (( result >> 31 ) ^ (op1Value >> 31)) & (( op1Value ) != ( op2Value )) )
+		{
+			setFlag(STAT_C);
+		}
+		
+		else 
+		{
+			clearFlag(STAT_C);
+		}	
+		
+	}
+}
+
+
+void doMove(int regNumber, WORD op2Value, int setSR)
+{
+	registers[ regNumber ] = op2Value;
+}
+
+/*
+	DECODE UTILITIES
+*/
+int decode(int condition_code)
+{
+	switch ( condition_code ) {
+		/* For this I just followed the data sheet. Should be right
+		
+		#define STAT_N	(1<<7)
+		#define STAT_Z	(1<<6) 
+		#define STAT_C	(1<<5) 
+		#define STAT_V	(1<<4) 
+		
+		*/
+		case CC_EQ: 	
+			return isSet( STAT_Z ) ;
+			break;	// check if zero flag is set
+		case CC_NE: 
+			return isClear( STAT_Z ) ;
+			break;	// check if zero flag is clear
+		case CC_CS:// Carry set (also used for Unsigned higher or same)
+			return isSet(STAT_C);
+			break;
+		case CC_CC:// Carry clear (also used for Unsigned lower)
+			return isClear( STAT_C );
+			break;
+		case CC_MI:// Minus / negative
+			return isSet( STAT_N );
+			break;
+		case CC_PL:// Plus / positive
+			return isClear( STAT_N );
+			break;
+		case CC_VS:// Overflow
+			return isSet( STAT_V );
+			break;
+		case CC_VC:// No overflow
+			return isClear( STAT_N );
+			break;
+		case CC_HI:// Unsigned hiher
+			return (isClear(STAT_Z) && isSet(STAT_C) );
+			break;
+		case CC_LS:// Unsigned lower or same
+			return (isSet(STAT_Z) && isClear(STAT_C) );
+			break;
+		case CC_GE:// Signed greater than or quals
+			return ( (isClear(STAT_N) && isClear(STAT_V)) || (isSet(STAT_N) && isClear(STAT_V)) );
+			break;
+		case CC_LT:  //less than
+			return ( (isSet( STAT_N ) && isClear( STAT_V )) || ( isClear(STAT_N) && isSet(STAT_V) ));
+			break;
+		case CC_GT: // Signed greater than
+			return ( (isClear( STAT_N ) && isClear( STAT_Z ) && isClear( STAT_V ) ) || (isSet( STAT_N ) && isClear( STAT_Z ) && isSet( STAT_V ) ) );
+			break;
+		case CC_LE: // Signed less than or equals
+			return ( ( isSet( STAT_N ) && isClear( STAT_V ) ) || ( isClear(STAT_N) && isSet(STAT_V) ) || ( isSet(STAT_Z) ) );
+			break;
+		case CC_AL: //ALWAYS
+			return 1; 
+			break;
+		case CC_NV: //NEVER
+			return 0; 
+			break;
+	}
+}
+
+
+/*
+	CURRENT PROGRAM STATUS REGISTER UTILITIES
+*/
+
+int isSet(int flag)
+{
+	return (status_register & flag);
+}
+
+int isClear(int flag)
+{
+	return ((~status_register) & flag);
+}
+
+void setFlag(int flag)
+{
+	status_register = status_register | flag;
+}
+
+void clearFlag(int flag)
+{
+	status_register = status_register & (~flag);
+}
+
+/*
+
+*/
